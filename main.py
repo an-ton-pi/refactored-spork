@@ -17,6 +17,9 @@ last_sent_links = set()
 def get_articles():
     url = 'https://moskvichka.ru/articles'
     response = requests.get(url)
+    print("DEBUG: первые 1000 символов страницы:")
+    print(response.text[:1000])  # Выводим в лог первые 1000 символов HTML для анализа
+
     soup = BeautifulSoup(response.text, 'html.parser')
 
     articles = []
@@ -40,6 +43,9 @@ def check_articles_loop():
             print("🔎 Проверка сайта на новые статьи...")
             articles = get_articles()
             print(f"👀 Найдено статей: {len(articles)}")
+
+            for art in articles:
+                print(f"📄 {art['title']} — {art['url']}")
 
             new_articles = [a for a in articles if a['url'] not in last_sent_links]
 
