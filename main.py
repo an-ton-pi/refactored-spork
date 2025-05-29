@@ -15,15 +15,18 @@ bot = Bot(token=TELEGRAM_TOKEN)
 SENT_FILE = "sent_articles.json"
 API_URL = "https://moskvichka.ru/api/articles?page=1&limit=10"
 
+
 def load_sent_articles():
     if os.path.exists(SENT_FILE):
         with open(SENT_FILE, "r") as f:
             return set(json.load(f))
     return set()
 
+
 def save_sent_articles(sent_ids):
     with open(SENT_FILE, "w") as f:
         json.dump(list(sent_ids), f)
+
 
 def fetch_articles(page=1, limit=10):
     try:
@@ -31,20 +34,20 @@ def fetch_articles(page=1, limit=10):
             "User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)",
             "Accept": "application/json"
         }
-        response = requests.get(API_URL, params={"page": page, "limit": limit}, headers=headers)
-        print(f"🔄 Статус ответа: {response.status_code}")
-        print("📦 Raw response text:")
-        print(response.text[:1000])  # ограничим вывод до 1000 символов
+        url = f"https://moskvichka.ru/api/articles?page={page}&limit={limit}"
+        response = requests.get(url, headers=headers)
 
+        print(f"🔄 Статус ответа: {response.status_code}")
         response.raise_for_status()
         data = response.json()
 
-        if "items" in data:
-            print(f"✅ Найдено статей: {len(data['items'])}")
-        else:
-            print("⚠️ В ответе нет ключа 'items'")
+        items = data.get("items")
+        if not items:
+            print("⚠️ В ответе нет ключа 'items' или он пуст")
+            return []
 
-        return data.get("items", [])
+        print(f"✅ Найдено статей: {len(items)}")
+        return items
 
     except requests.RequestException as e:
         print(f"❌ Ошибка HTTP: {e}")
@@ -55,6 +58,7 @@ def fetch_articles(page=1, limit=10):
 
     return []
 
+
 def format_article(article):
     title = article.get("title", "Без названия")
     slug = article.get("slug", "")
@@ -62,6 +66,7 @@ def format_article(article):
     excerpt = article.get("excerpt", "")
     url = f"https://moskvichka.ru/articles/{slug}"
     return f"📰 <b>{title}</b>\n📅 {date}\n\n{excerpt}\n\n🔗 {url}"
+
 
 def check_new_articles():
     sent_ids = load_sent_articles()
@@ -85,14 +90,17 @@ def check_new_articles():
         print(f"✅ Новых статей отправлено: {len(new_articles)}")
         save_sent_articles(sent_ids)
 
-        time.sleep(60)  # каждые 1 минуту
+        time.sleep(60)  # каждую 1 минуту
+
 
 # Flask
 app = Flask(__name__)
 
+
 @app.route("/")
 def home():
     return "Бот работает!"
+
 
 if __name__ == "__main__":
     threading.Thread(target=check_new_articles, daemon=True).start()
