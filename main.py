@@ -1,45 +1,71 @@
+import os
+import time
 import requests
-from bs4 import BeautifulSoup
+from flask import Flask
+from telegram import Bot
+from dotenv import load_dotenv
 
-# URL страницы со статьями
-url = 'https://moskvichka.ru/articles'
+load_dotenv()
 
-# Заголовки для запроса (можно добавить, если сайт требует)
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-}
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")  # можно несколько ID через запятую
+INTERVAL = int(os.getenv("INTERVAL", 600))  # по умолчанию 10 минут
+BASE_URL = "https://moskvichka.ru"
+API_URL = f"{BASE_URL}/api/articles"
 
-# Выполняем GET-запрос к странице
-response = requests.get(url, headers=headers)
+sent_article_ids = set()
+bot = Bot(token=TELEGRAM_TOKEN)
+app = Flask(__name__)
 
-# Проверяем успешность запроса
-if response.status_code == 200:
-    # Создаём объект BeautifulSoup для парсинга HTML
-    soup = BeautifulSoup(response.text, 'html.parser')
+def fetch_articles(page=1, limit=10):
+    try:
+        resp = requests.get(API_URL, params={"page": page, "limit": limit})
+        data = resp.json()
+        return data.get("items", [])
+    except Exception as e:
+        print(f"Ошибка при получении статей: {e}")
+        return []
 
-    # Ищем все элементы статей (предположим, что статьи находятся в тегах <a> с классом 'card-article')
-    articles = soup.find_all('a', class_='card-article')
+def format_article(article):
+    url = f"{BASE_URL}/articles/{article['slug']}"
+    text = f"📰 <b>{article['title']}</b>\n"
+    text += f"🗓 {article['publishDate'][:10]}\n"
+    text += f"{article.get('excerpt', '')}\n\n"
+    text += f"<a href='{url}'>Читать статью</a>"
+    return text
 
-    # Проверяем, найдены ли статьи
-    if articles:
-        print(f'Найдено статей: {len(articles)}\n')
+def check_new_articles():
+    print("🔎 Проверка сайта на новые статьи...")
+    new_articles = []
+    articles = fetch_articles(page=1, limit=10)
 
-        # Проходим по каждой найденной статье
-        for article in articles:
-            # Извлекаем заголовок статьи
-            title = article.get_text(strip=True)
+    for article in articles:
+        if article["id"] not in sent_article_ids:
+            new_articles.append(article)
+            sent_article_ids.add(article["id"])
 
-            # Извлекаем ссылку на статью
-            link = article.get('href')
+    print(f"👀 Найдено статей: {len(articles)}")
+    print(f"✅ Новых статей отправлено: {len(new_articles)}")
 
-            # Если ссылка относительная, добавляем домен
-            if link and not link.startswith('http'):
-                link = f'https://moskvichka.ru{link}'
+    for article in reversed(new_articles):  # от старых к новым
+        text = format_article(article)
+        for chat_id in CHAT_IDS:
+            try:
+                bot.send_message(chat_id=chat_id.strip(), text=text, parse_mode="HTML", disable_web_page_preview=False)
+            except Exception as e:
+                print(f"Ошибка при отправке статьи в чат {chat_id}: {e}")
 
-            # Выводим информацию о статье
-            print(f'Заголовок: {title}')
-            print(f'Ссылка: {link}\n')
-    else:
-        print('Статьи не найдены. Возможно, структура сайта изменилась.')
-else:
-    print(f'Ошибка при запросе страницы: {response.status_code}')
+@app.route("/")
+def index():
+    return "Бот работает!", 200
+
+# запуск периодической проверки
+def run_scheduler():
+    while True:
+        check_new_articles()
+        time.sleep(INTERVAL)
+
+if __name__ == "__main__":
+    from threading import Thread
+    Thread(target=run_scheduler, daemon=True).start()
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
