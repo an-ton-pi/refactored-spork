@@ -9,7 +9,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")  # можно несколько ID через запятую
-INTERVAL = int(os.getenv("INTERVAL", 600))  # по умолчанию 10 минут
+INTERVAL = int(os.getenv("INTERVAL", 60))  # по умолчанию 1 минуту
 BASE_URL = "https://moskvichka.ru"
 API_URL = f"{BASE_URL}/api/articles"
 
