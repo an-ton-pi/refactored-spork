@@ -1,71 +1,99 @@
+import json
 import os
 import time
-import requests
+import threading
 from flask import Flask
+import requests
 from telegram import Bot
-from dotenv import load_dotenv
 
-load_dotenv()
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")  # можно несколько ID через запятую
-INTERVAL = int(os.getenv("INTERVAL", 60))  # по умолчанию 1 минуту
-BASE_URL = "https://moskvichka.ru"
-API_URL = f"{BASE_URL}/api/articles"
-
-sent_article_ids = set()
+# Telegram
+TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_IDS = os.getenv("CHAT_IDS", "").split(",")  # через запятую
 bot = Bot(token=TELEGRAM_TOKEN)
-app = Flask(__name__)
+
+# Статьи
+SENT_FILE = "sent_articles.json"
+API_URL = "https://moskvichka.ru/api/articles?page=1&limit=10"
+
+def load_sent_articles():
+    if os.path.exists(SENT_FILE):
+        with open(SENT_FILE, "r") as f:
+            return set(json.load(f))
+    return set()
+
+def save_sent_articles(sent_ids):
+    with open(SENT_FILE, "w") as f:
+        json.dump(list(sent_ids), f)
 
 def fetch_articles(page=1, limit=10):
     try:
-        resp = requests.get(API_URL, params={"page": page, "limit": limit})
-        data = resp.json()
+        headers = {
+            "User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)",
+            "Accept": "application/json"
+        }
+        response = requests.get(API_URL, params={"page": page, "limit": limit}, headers=headers)
+        print(f"🔄 Статус ответа: {response.status_code}")
+        print("📦 Raw response text:")
+        print(response.text[:1000])  # ограничим вывод до 1000 символов
+
+        response.raise_for_status()
+        data = response.json()
+
+        if "items" in data:
+            print(f"✅ Найдено статей: {len(data['items'])}")
+        else:
+            print("⚠️ В ответе нет ключа 'items'")
+
         return data.get("items", [])
+
+    except requests.RequestException as e:
+        print(f"❌ Ошибка HTTP: {e}")
+    except ValueError as e:
+        print(f"❌ Ошибка JSON: {e}")
     except Exception as e:
-        print(f"Ошибка при получении статей: {e}")
-        return []
+        print(f"❌ Неизвестная ошибка: {e}")
+
+    return []
 
 def format_article(article):
-    url = f"{BASE_URL}/articles/{article['slug']}"
-    text = f"📰 <b>{article['title']}</b>\n"
-    text += f"🗓 {article['publishDate'][:10]}\n"
-    text += f"{article.get('excerpt', '')}\n\n"
-    text += f"<a href='{url}'>Читать статью</a>"
-    return text
+    title = article.get("title", "Без названия")
+    slug = article.get("slug", "")
+    date = article.get("published_at", "")[:10]
+    excerpt = article.get("excerpt", "")
+    url = f"https://moskvichka.ru/articles/{slug}"
+    return f"📰 <b>{title}</b>\n📅 {date}\n\n{excerpt}\n\n🔗 {url}"
 
 def check_new_articles():
-    print("🔎 Проверка сайта на новые статьи...")
-    new_articles = []
-    articles = fetch_articles(page=1, limit=10)
+    sent_ids = load_sent_articles()
 
-    for article in articles:
-        if article["id"] not in sent_article_ids:
-            new_articles.append(article)
-            sent_article_ids.add(article["id"])
+    while True:
+        print("\n🔎 Проверка сайта на новые статьи...\n")
+        articles = fetch_articles()
+        new_articles = []
 
-    print(f"👀 Найдено статей: {len(articles)}")
-    print(f"✅ Новых статей отправлено: {len(new_articles)}")
+        for art in articles:
+            art_id = art.get("id")
+            if art_id and art_id not in sent_ids:
+                new_articles.append(art)
+                sent_ids.add(art_id)
 
-    for article in reversed(new_articles):  # от старых к новым
-        text = format_article(article)
-        for chat_id in CHAT_IDS:
-            try:
-                bot.send_message(chat_id=chat_id.strip(), text=text, parse_mode="HTML", disable_web_page_preview=False)
-            except Exception as e:
-                print(f"Ошибка при отправке статьи в чат {chat_id}: {e}")
+        for article in reversed(new_articles):  # от старой к новой
+            msg = format_article(article)
+            for chat_id in CHAT_IDS:
+                bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+
+        print(f"✅ Новых статей отправлено: {len(new_articles)}")
+        save_sent_articles(sent_ids)
+
+        time.sleep(60)  # каждые 1 минуту
+
+# Flask
+app = Flask(__name__)
 
 @app.route("/")
-def index():
-    return "Бот работает!", 200
-
-# запуск периодической проверки
-def run_scheduler():
-    while True:
-        check_new_articles()
-        time.sleep(INTERVAL)
+def home():
+    return "Бот работает!"
 
 if __name__ == "__main__":
-    from threading import Thread
-    Thread(target=run_scheduler, daemon=True).start()
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    threading.Thread(target=check_new_articles, daemon=True).start()
+    app.run(host="0.0.0.0", port=8080)
